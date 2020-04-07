@@ -5,6 +5,7 @@
 #include "shell/common/api/electron_api_clipboard.h"
 
 #include "base/strings/utf_string_conversions.h"
+#include "base/synchronization/waitable_event.h"
 #include "shell/common/gin_converters/image_converter.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/node_includes.h"
@@ -17,6 +18,37 @@
 namespace electron {
 
 namespace api {
+
+namespace {
+
+// Based on clipboard_test_util::ReadImageHelper that accepts
+// clipboardbuffer as argument
+// TODO(deepak1556): Make clipboard api async and remove this helper class.
+class ReadImageHelper {
+ public:
+  ReadImageHelper() = default;
+  ~ReadImageHelper() = default;
+
+  void DidReadImage(base::WaitableEvent* event,
+                    SkBitmap* result,
+                    const SkBitmap& bitmap) {
+    *result = bitmap;
+    event->Signal();
+  }
+
+  SkBitmap ReadImage(ui::Clipboard* clipboard, ui::ClipboardBuffer buffer) {
+    base::WaitableEvent event;
+    SkBitmap bitmap;
+    clipboard->ReadImage(
+        buffer,
+        base::BindOnce(&ReadImageHelper::DidReadImage, base::Unretained(this),
+                       base::Unretained(&event), base::Unretained(&bitmap)));
+    event.Wait();
+    return bitmap;
+  }
+};
+
+}  // namespace
 
 ui::ClipboardBuffer Clipboard::GetClipboardBuffer(gin_helper::Arguments* args) {
   std::string type;
@@ -180,7 +212,9 @@ void Clipboard::WriteBookmark(const base::string16& title,
 
 gfx::Image Clipboard::ReadImage(gin_helper::Arguments* args) {
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
-  SkBitmap bitmap = clipboard->ReadImage(GetClipboardBuffer(args));
+  ReadImageHelper read_image_helper;
+  SkBitmap bitmap =
+      read_image_helper.ReadImage(clipboard, GetClipboardBuffer(args));
   return gfx::Image::CreateFrom1xBitmap(bitmap);
 }
 
